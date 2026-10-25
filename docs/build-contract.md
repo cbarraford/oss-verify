@@ -197,7 +197,7 @@ Thus an OSS-Fuzz testcase needs six zero bytes in front of it: `00 00 00 00 00 0
 |---:|---|
 | 0 | each call of the fuzz target returned 0 or -1 |
 | 2 | the driver refused the input and did not call the fuzz target, or the system refused memory to the Go runtime ([below](#go-fuzz-targets)) |
-| 77 | the fuzz target called `exit()` |
+| 77 | the fuzz target called `exit()` during a call, and no exit handler registered after the driver's guard ended the process first ([below](#what-the-driver-does-not-intercept)); in a Go fuzz target, `os.Exit` during a call ([below](#go-fuzz-targets)) |
 | 78 | a call of the fuzz target returned a value that is not 0 or -1 |
 | 79 | a Go fuzz target panicked: a `panic`, a runtime error, or `t.Fatal`, `t.Error` or `t.Fail` in a fuzz test ([below](#go-fuzz-targets)) |
 | 80 | the Go runtime stopped with a fatal error that is not out of memory, for example a deadlock or a stack overflow ([below](#go-fuzz-targets)) |
@@ -235,6 +235,10 @@ A sanitizer detection writes nothing. AddressSanitizer aborts silently. Undefine
 
 The driver changes a call of `exit()`, during a call of the fuzz target, into status 77. An `atexit` handler does this. The driver does not intercept `_exit`, `_Exit` or `quick_exit`, which do not run `atexit` handlers. A fuzz target that calls one of them ends the process with the status that it gave. `test_builder.py` shows this.
 
+With today's driver, it registers that handler once, before it calls `LLVMFuzzerInitialize`, and the handler gives 77 only while a call of the fuzz target runs. So an `exit()` in `LLVMFuzzerInitialize` is not 77: unless a handler ends the process first, it ends with the low 8 bits of its argument. Exit handlers run last-registered-first. Thus a handler that the fuzz target or the library registers later, in `LLVMFuzzerInitialize` or during a call, runs first. If that handler ends the process itself (`_exit`, `_Exit`, `quick_exit`, `abort`, a jump out of it, or the `exit_group` system call), the `exit()` never reaches the guard and the process ends with that handler's status, which can be 0. `test_builder.py` shows both cases: a later handler that calls `_Exit(0)` gives status 0, and one that returns leaves the guard to give 77.
+
+> **WARNING:** Do not register an exit handler that ends the process. It can hide a failed check: the process can then end with a status that a statement allows, for example 0.
+
 > **WARNING:** Do not install a handler for `SIGABRT`, `SIGSEGV` or another signal in a fuzz target. A handler hides a sanitizer detection.
 
 The driver itself never intercepts a signal or `abort()`.
@@ -245,7 +249,7 @@ An allocation-failure fuzz target shows that the library survives refused alloca
 
 The fuzz target must change an out-of-memory stop into a normal exit, and only that stop. To do this, catch `std::bad_alloc`, or use the library's own hooks for allocation failure.
 
-> **WARNING:** Do not catch all exceptions. Do not install a `SIGABRT` handler. Such code hides failures that the statements must show.
+> **WARNING:** Do not catch all exceptions. Do not call `std::set_terminate`. Do not install a `SIGABRT` handler. Such code hides failures that the statements must show.
 
 To make an allocation-failure fuzz target, link the object files of a fuzz target again, into a different binary, with `$LIB_ALLOCATION_FAILURE_ENGINE`:
 

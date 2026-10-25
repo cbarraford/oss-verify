@@ -125,7 +125,7 @@ The statements use [Linux Process Semantics (LPS)](https://github.com/theorem-la
 
 ### 3.7 Return 0 or -1
 
-> **WARNING:** Do not call `exit()` or `_exit()`. Do not catch all exceptions. Do not install a signal handler. Such code hides the failures that the statements must show.
+> **WARNING:** Do not call `exit()` or `_exit()`. Do not catch all exceptions. Do not install a signal handler. Do not register an exit handler that ends the process (`atexit` of a function that calls `_exit`, `_Exit`, `quick_exit` or `abort`), and do not call `std::set_terminate`. Such code hides the failures that the statements must show.
 
 A fuzz target can have two kinds of check. Each kind has its own result:
 
