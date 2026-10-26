@@ -341,7 +341,7 @@ The lock in the project directory is the lock of the generated `oft-rust-shim` p
     copy	targets/<target>/Cargo.lock	Cargo.lock
     crates	ext/<target>/vendor	targets/<target>/Cargo.lock	ext/<target>/src	fuzz	<bin>
 
-A lock of the fuzz package names neither `oft-rust-shim` nor `oft-rust-rt`. `cargo vendor --locked` refuses to update a lock, so the build stops with `cannot update the lock file ... because --locked was passed to prevent this` (exit status 101). `lay-out-sources` also stops when `cargo vendor` changed the lock, so the lock must stay as it is.
+A lock of the fuzz package names neither `oft-rust-shim` nor `oft-rust-rt`. `cargo vendor --locked` refuses to update a lock, so the build stops with exit status 101, and the build log shows cargo's reason after the `lay-out-sources` line: `the lock file .../shim/Cargo.lock needs to be updated but --locked was passed to prevent this` (a newer cargo than the toolchain's words it `cannot update the lock file ... because --locked was passed to prevent this`). `lay-out-sources` also stops when `cargo vendor` changed the lock, so the lock must stay as it is.
 
 Make the lock from a checkout of this repository, with the same steps that the build uses:
 
