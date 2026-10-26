@@ -14,7 +14,7 @@ label, pr, project and sha, and one line, reason, that says why. The decision is
   label     the workflow puts `label` on the pull request, and sends nothing:
               size-review      a plain binary is larger than SIZE_LIMIT, or its size could not be read (a binary the
                                loader maps no executable byte of is one)
-              language-paused  the project's language is one Sami Jawhar has paused
+              language-paused  the project's language is one whose projects are paused for now
               name-review      the project's name has a dot, which the statements repository's names cannot have
   none      anything else, a project.yaml whose language cannot be read included; `reason` says what
 
@@ -42,7 +42,7 @@ A pull request that changes a project already enrolled is sent too: its facts ar
 
 The sizes are read from the ELF headers of the files the project's own build wrote, so a build that rewrites its
 program headers can make them small. The statements repository measures its own build again, its daily limit caps
-what any enrollment can start, and Sami or Jason review every facts pull request.
+what any enrollment can start, and a person reviews each facts pull request.
 """
 from __future__ import annotations
 
@@ -56,13 +56,13 @@ import zipfile
 
 import yaml
 
-# Sami Jawhar's size line for statements without a person's decision, "Up to 1 MB" of a plain binary
+# The size line for statements that start with no person's decision, "Up to 1 MB" of a plain binary
 # (dispatch://OSSV-141/ask/7c73eb21), the README's "less than 1 MB of code": 1 MB is 1,000,000 bytes here. It is
 # applied to the larger of the .text section's size and the bytes the loader maps executable, which renaming or
-# resizing a section does not change (tools/manifest.py, executable_bytes).
+# resizing a section does not change (tools/manifest.py, executable_bytes); the executable segments can hold
+# read-only data too, so the measure errs toward a person's review, never away from it.
 SIZE_LIMIT = 1_000_000
-# Languages whose projects are stopped until Sami says otherwise: "Stopped until Sami says otherwise: ... Python
-# projects" (the OSS Verify stream's goals, dispatch://OSSV/artifact/goals-md, owners in dispatch://OSSV-199).
+# Languages whose projects are paused for now.
 PAUSED_LANGUAGES = frozenset({"python"})
 # The workflow file and event each required check must come from. Each is required here whatever the ruleset says, and
 # so is any other check the ruleset requires (which, with no source here, is never passed).
