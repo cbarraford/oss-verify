@@ -41,11 +41,14 @@ on:
     types: [completed]
 permissions: {}
 concurrency:
-  # The runs for one commit wait for each other, so that they read the checks one after another. A Build run started
-  # by hand is about the pull request its record names, not the main commit it ran on: each has a group of its own.
+  # The runs for one pull request's head wait for each other, so that they read the checks one after another. The
+  # group names the head's repository and branch too, so that another pull request at the same commit cancels no run
+  # of this one. A Build run started by hand is about the pull request its record names, not the main commit it ran
+  # on: each has a group of its own.
   group: >-
     enroll-dispatch-${{ github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.id
-    || github.event.workflow_run.head_sha }}
+    || format('{0}-{1}-{2}', github.event.workflow_run.head_sha,
+    github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch) }}
   cancel-in-progress: false
 
 jobs:
@@ -175,27 +178,17 @@ jobs:
           private-key: ${{ steps.key.outputs.key }}
           permission-pull-requests: write
 
-      # On label: the label. On dispatch: the labels an earlier commit got, which this commit no longer needs.
       - name: Label the pull request
+        if: env.DECISION == 'label'
         env:
           GH_TOKEN: ${{ steps.label-token.outputs.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ "$DECISION" = label ]; then
-            jq -n --arg label "$LABEL" '{labels: [$label]}' \
-              | gh api --method POST "repos/$REPO/issues/$PR/labels" --input - > /dev/null
-            echo "pull request $PR: labelled $LABEL; no statements are started for $PROJECT at $SHA" \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          for old in $(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name'); do
-            case $old in
-              size-review|language-paused|name-review)
-                gh api --method DELETE "repos/$REPO/issues/$PR/labels/$old" > /dev/null
-                echo "pull request $PR: $old taken off, since $SHA is sent" | tee -a "$GITHUB_STEP_SUMMARY" ;;
-            esac
-          done
+          jq -n --arg label "$LABEL" '{labels: [$label]}' \
+            | gh api --method POST "repos/$REPO/issues/$PR/labels" --input - > /dev/null
+          echo "pull request $PR: labelled $LABEL; no statements are started for $PROJECT at $SHA" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Get the App's token for the private repository's contents
         if: env.DECISION == 'dispatch'
@@ -218,6 +211,22 @@ jobs:
             '{event_type: "enrollment-checked", client_payload: {pr: $pr, sha: $sha, project: $project}}' \
             | gh api --method POST "repositories/$INTERNAL_ID/dispatches" --input -
           echo "pull request $PR: sent enrollment-checked for $PROJECT at $SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Only after the send: a send that fails leaves the labels, so that the pull request still says where it stands.
+      - name: Take off the labels an earlier commit got
+        if: env.DECISION == 'dispatch'
+        env:
+          GH_TOKEN: ${{ steps.label-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for old in $(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name'); do
+            case $old in
+              size-review|language-paused|name-review)
+                gh api --method DELETE "repos/$REPO/issues/$PR/labels/$old" > /dev/null
+                echo "pull request $PR: $old taken off, since $SHA is sent" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            esac
+          done
 
       - name: Revoke the private repository's token
         if: always() && steps.dispatch-token.outputs.token != ''
