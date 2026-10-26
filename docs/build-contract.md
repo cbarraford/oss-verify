@@ -319,7 +319,7 @@ It needs `qemu-riscv64-static` on `PATH`, and compiler-rt's source from GitHub o
 
 ## Rust fuzz targets
 
-A Rust fuzz target is a cargo-fuzz `[[bin]]` of the project's repository. The Rust toolchain image adds Rust nightly-2025-07-16 (rustc 1.90.0, LLVM 20.1.8) and its sealed standard library to the C and C++ toolchain. Its row in infra/toolchains.tsv names it. The oss-fuzz-theorems 2026.10 release built its Rust binaries in this image.
+A Rust fuzz target is a cargo-fuzz `[[bin]]` of the project's repository. The Rust toolchain image adds Rust nightly-2025-07-16 (rustc 1.90.0, LLVM 20.1.8) and its sealed standard library to the C and C++ toolchain. Its row in infra/toolchains.tsv names it. The oss-fuzz-theorems 2026.10 release built its Rust binaries in this image. Code that needs a newer Rust than this one takes a build patch: [projects/sqlpage/rust-duration-compat.patch](../projects/sqlpage/rust-duration-compat.patch) replaces `Duration::from_mins` and `Duration::from_hours`, which this rustc does not have ([below](#build-patches)).
 
 rustc makes no static library from a `[[bin]]`. Thus the build makes one package for each fuzz target: [rust/gen-shim.py](../infra/base-builder/rust/gen-shim.py) writes a package named `oft-rust-shim`, whose library root is a copy of the bin's source without its `#![no_main]` lines. The package depends on the adapter `oft-rust-rt`, on the dependencies of the fuzz package, and on the fuzz package itself when it has a `[lib]`. `build.sh` then builds this package and links it with the driver ([rust/recipes.sh](../infra/base-builder/rust/recipes.sh)).
 
