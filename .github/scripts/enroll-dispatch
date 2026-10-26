@@ -12,30 +12,37 @@ label, pr, project and sha, and one line, reason, that says why. The decision is
 
   dispatch  the workflow sends the event enrollment-checked for pr, project and sha
   label     the workflow puts `label` on the pull request, and sends nothing:
-              size-review      a plain binary is larger than SIZE_LIMIT, or its size could not be read
+              size-review      a plain binary is larger than SIZE_LIMIT, or its size could not be read (a binary the
+                               loader maps no executable byte of is one)
               language-paused  the project's language is one Sami Jawhar has paused
               name-review      the project's name has a dot, which the statements repository's names cannot have
-  none      anything else; `reason` says what
+  none      anything else, a project.yaml whose language cannot be read included; `reason` says what
 
-Which commit, and whose record. A run of a pull request (pull_request_target or pull_request) is about its head
-commit. A run of Build started by hand on main (gh workflow run build.yaml -f pr=<n>) is about the commit its record
-names: that is how a maintainer has this look again at a pull request whose checks passed before its Build wrote a
-record. Any other run is none.
+Which commit, whose pull request, and whose record. A run of a pull request (pull_request_target or pull_request) is
+about its head commit, and about the head it came from (the repository and branch of that run). A run of Build
+started by hand on main (gh workflow run build.yaml -f pr=<n>) is about the commit its record names, and the head of
+the pull request it names: that is how a maintainer has this look again at a pull request whose checks passed before
+its Build wrote a record. Any other run is none.
 
-Every required check is bound to its source. The checks main's ruleset requires are read from rules/branches/main, and
-each must have passed at that commit in a run of the workflow file and event REQUIRED_SOURCES names, whose head commit
-is that commit. A check run of the same name from any other run (a fork's own copy of a workflow, a run of another
-commit) is not counted, and a required check with no entry in REQUIRED_SOURCES is never passed. pull_request_target
-runs the default branch's workflow file whatever the pull request holds, so project-builds, enrollment and
-terms-accepted cannot be made by the pull request. The record is the artifact enrollment-record of the Build run whose
-project-builds check is the bound one (or of the run started by hand), which build.yaml's record job wrote from
-project-builds' outputs; every value of it is checked against its shape.
+Every required check is bound to its source: each check of REQUIRED_SOURCES, and any other the ruleset of main
+requires (rules/branches/main), must have passed at that commit in a run of the workflow file and event
+REQUIRED_SOURCES names, whose head commit is that commit and whose head is that head; of those runs, the newest
+decides. A check run of the same name from any other run (a fork's own copy of a workflow, a run of another commit, a
+second pull request at the same commit) is not counted, and a required check with no entry in REQUIRED_SOURCES is never
+passed. pull_request_target runs the default branch's workflow file whatever the pull request holds, so
+project-builds, enrollment and terms-accepted cannot be made by the pull request. The record is the artifact
+enrollment-record of the Build run whose project-builds check is the bound one (or of the run started by hand), which
+build.yaml's record job wrote from project-builds' outputs; every value of it is checked against its shape.
 
-The pull request is the one the record names. It must be open, into main, with that commit as its head, and its files
-must all be under one projects/<name>/, the record's project; it is read again after its files, and a pull request
-whose head moved meanwhile is none (the run for the new head decides).
+The pull request is the one the record names. It must be open, into main, from that head, with that commit as its head
+commit, and its files must all be under one projects/<name>/, the record's project; it is read again after its files,
+and a pull request whose head moved meanwhile is none (the run for the new head decides).
 
 A pull request that changes a project already enrolled is sent too: its facts are made again at the new commit.
+
+The sizes are read from the ELF headers of the files the project's own build wrote, so a build that rewrites its
+program headers can make them small. The statements repository measures its own build again, its daily limit caps
+what any enrollment can start, and Sami or Jason review every facts pull request.
 """
 from __future__ import annotations
 
@@ -50,20 +57,22 @@ import zipfile
 import yaml
 
 # Sami Jawhar's size line for statements without a person's decision, "Up to 1 MB" of a plain binary
-# (dispatch://OSSV-141/ask/7c73eb21), the README's "less than 1 MB of .text": 1 MB is 1,000,000 bytes here. It is
-# applied to the larger of the .text section's size and the bytes the loader maps executable, which the build cannot
-# shrink by renaming or resizing a section (tools/manifest.py, executable_bytes).
+# (dispatch://OSSV-141/ask/7c73eb21), the README's "less than 1 MB of code": 1 MB is 1,000,000 bytes here. It is
+# applied to the larger of the .text section's size and the bytes the loader maps executable, which renaming or
+# resizing a section does not change (tools/manifest.py, executable_bytes).
 SIZE_LIMIT = 1_000_000
 # Languages whose projects are stopped until Sami says otherwise: "Stopped until Sami says otherwise: ... Python
 # projects" (the OSS Verify stream's goals, dispatch://OSSV/artifact/goals-md, owners in dispatch://OSSV-199).
 PAUSED_LANGUAGES = frozenset({"python"})
-# The workflow file and event each required check must come from.
+# The workflow file and event each required check must come from. Each is required here whatever the ruleset says, and
+# so is any other check the ruleset requires (which, with no source here, is never passed).
 REQUIRED_SOURCES = {
     "project-builds": (".github/workflows/build.yaml", "pull_request_target"),
     "enrollment": (".github/workflows/validate.yaml", "pull_request_target"),
     "terms-accepted": (".github/workflows/terms.yaml", "pull_request_target"),
     "tests": (".github/workflows/tests.yaml", "pull_request"),
 }
+ACTIONS_APP = 15368  # GitHub Actions, the app of every check run above
 BUILD_WORKFLOW = ".github/workflows/build.yaml"
 RECORD_ARTIFACT = "enrollment-record"
 RECORD_SCHEMA = "oss-verify enrollment record v1"
@@ -121,18 +130,26 @@ class Runs:
 
 
 def required_checks(api: Api, repo: str) -> list[tuple[str, int | None]]:
-    """(context, integration id) of every status check the default branch's rules require."""
-    out = []
+    """(context, integration id) of every status check the default branch's rules require, and every check of
+    REQUIRED_SOURCES whether the rules list it or not: a ruleset that is off, or edited, lowers no bar here."""
+    out = {context: ACTIONS_APP for context in REQUIRED_SOURCES}
     for rule in api.get(f"repos/{repo}/rules/branches/{DEFAULT_BRANCH}"):
         if rule.get("type") == "required_status_checks":
             for check in (rule.get("parameters") or {}).get("required_status_checks") or []:
-                out.append((check["context"], check.get("integration_id")))
-    return out
+                out[check["context"]] = check.get("integration_id") or out.get(check["context"])
+    return sorted(out.items())
 
 
-def bound_checks(api: Api, runs: Runs, repo: str, sha: str) -> tuple[list[str], int | None]:
+def head_of(run: dict) -> tuple[object, object]:
+    """The repository and branch a run's pull request came from."""
+    return (run.get("head_repository") or {}).get("full_name"), run.get("head_branch")
+
+
+def bound_checks(api: Api, runs: Runs, repo: str, sha: str, head: tuple) -> tuple[list[str], int | None]:
     """The required checks that have not passed at `sha` from their bound source, and the Actions run of the bound
-    project-builds check (None if it has not passed)."""
+    project-builds check (None if it has not passed). A check counts only from a run of its workflow file and event,
+    at `sha`, of the pull request whose head is `head` (repository, branch): another pull request at the same commit
+    neither blocks this one nor speaks for it. Of those, the newest decides."""
     check_runs = [c for page in api.pages(f"repos/{repo}/commits/{sha}/check-runs?filter=all&per_page=100")
                   for c in page.get("check_runs") or []]
     waiting, build_run = [], None
@@ -149,7 +166,7 @@ def bound_checks(api: Api, runs: Runs, repo: str, sha: str) -> tuple[list[str], 
             if run_id is None:
                 continue
             run = runs.get(run_id)
-            if (run.get("path"), run.get("event")) == source and run.get("head_sha") == sha:
+            if (run.get("path"), run.get("event")) == source and run.get("head_sha") == sha and head_of(run) == head:
                 found = (check, run_id)
                 break
         if found is None:
@@ -211,11 +228,12 @@ def record_problem(record: object, sha: str | None) -> str:
 
 def oversized(record: dict) -> list[str]:
     """Each plain binary whose size (the larger of .text and the executable segments) is above SIZE_LIMIT or
-    unknown, as text for the reason line."""
+    unknown, as text for the reason line. A binary that the loader maps no executable byte of cannot run as built:
+    its headers do not say its size, which is unknown."""
     out = []
     for target, builds in sorted(record["sizes"].items()):
         text, exe = builds["plain"]["text"], builds["plain"]["exec"]
-        if text is None or exe is None:
+        if text is None or exe is None or exe == 0:
             out.append(f"{target}.plain (size unknown)")
         elif max(text, exe) > SIZE_LIMIT:
             out.append(f"{target}.plain ({text:,} bytes of .text, {exe:,} executable bytes)")
@@ -243,28 +261,31 @@ def the_project(files: list[dict]) -> tuple[str | None, str]:
     return names.pop(), ""
 
 
-def open_at(pull: dict, repo: str, sha: str) -> str:
-    """Why the pull request is not open into the default branch at `sha`, or ''."""
-    base, head = pull.get("base") or {}, pull.get("head") or {}
+def open_at(pull: dict, repo: str, sha: str, head: tuple | None) -> str:
+    """Why the pull request is not open into the default branch at `sha`, from `head` (repository, branch) when it
+    is given, or ''."""
+    base, at = pull.get("base") or {}, pull.get("head") or {}
     if pull.get("state") != "open":
         return f"it is {pull.get('state')}"
     if base.get("ref") != DEFAULT_BRANCH or (base.get("repo") or {}).get("full_name") != repo:
         return f"it targets {base.get('ref')!r}, not {DEFAULT_BRANCH}"
-    if head.get("sha") != sha:
-        return f"its head is {head.get('sha')}, not {sha}: the run for its head decides"
+    if at.get("sha") != sha:
+        return f"its head is {at.get('sha')}, not {sha}: the run for its head decides"
+    if head is not None and ((at.get("repo") or {}).get("full_name"), at.get("ref")) != head:
+        return f"it comes from {at.get('label')!r}, not from the head the checks were run for"
     return ""
 
 
-def language(api: Api, repo: str, project: str, sha: str) -> str:
-    """The language projects/<project>/project.yaml gives at `sha`, lower case, or '' if it cannot be read."""
+def language(api: Api, repo: str, project: str, sha: str) -> str | None:
+    """The language projects/<project>/project.yaml gives at `sha`, lower case, or None if it cannot be read."""
     try:
         data = api.raw(f"repos/{repo}/contents/projects/{project}/project.yaml?ref={sha}")
         if len(data) > MAX_PROJECT_YAML_BYTES:
-            return ""
+            return None
         value = (yaml.safe_load(data) or {}).get("language")
-    except (subprocess.CalledProcessError, yaml.YAMLError, AttributeError):
-        return ""
-    return value.lower() if isinstance(value, str) else ""
+    except (subprocess.CalledProcessError, yaml.YAMLError, AttributeError, RecursionError):
+        return None
+    return value.lower() if isinstance(value, str) else None
 
 
 def decide(api: Api, repo: str, run_id: int, run_event: str, head_sha: str) -> dict:
@@ -272,7 +293,10 @@ def decide(api: Api, repo: str, run_id: int, run_event: str, head_sha: str) -> d
     if run_event in ("pull_request_target", "pull_request"):
         if not SHA.fullmatch(head_sha):
             return outcome("none", f"{head_sha!r} is not a commit id")
-        sha, record = head_sha, None
+        trigger = runs.get(run_id)
+        if trigger.get("head_sha") != head_sha:
+            return outcome("none", f"run {run_id} is of {trigger.get('head_sha')}, not {head_sha}")
+        sha, record, head = head_sha, None, head_of(trigger)
     elif run_event == "workflow_dispatch":
         run = runs.get(run_id)
         if (run.get("path"), run.get("head_branch"), (run.get("head_repository") or {}).get("full_name")) \
@@ -283,9 +307,11 @@ def decide(api: Api, repo: str, run_id: int, run_event: str, head_sha: str) -> d
         if why:
             return outcome("none", f"run {run_id}: {why}")
         sha = record["sha"]
+        at = api.get(f"repos/{repo}/pulls/{record['pr']}").get("head") or {}
+        head = ((at.get("repo") or {}).get("full_name"), at.get("ref"))
     else:
         return outcome("none", f"the run that completed was started by {run_event}, not by a pull request")
-    waiting, build_run = bound_checks(api, runs, repo, sha)
+    waiting, build_run = bound_checks(api, runs, repo, sha, head)
     if waiting:
         return outcome("none", f"required checks not passed at {sha[:7]}: {', '.join(waiting)}", sha=sha)
     if record is None:
@@ -294,7 +320,7 @@ def decide(api: Api, repo: str, run_id: int, run_event: str, head_sha: str) -> d
         if why:
             return outcome("none", why, sha=sha)
     number, project = record["pr"], record["project"]
-    why = open_at(api.get(f"repos/{repo}/pulls/{number}"), repo, sha)
+    why = open_at(api.get(f"repos/{repo}/pulls/{number}"), repo, sha, head)
     if why:
         return outcome("none", f"pull request {number}: {why}", number, project, sha)
     files = [f for page in api.pages(f"repos/{repo}/pulls/{number}/files?per_page=100") for f in page]
@@ -303,11 +329,14 @@ def decide(api: Api, repo: str, run_id: int, run_event: str, head_sha: str) -> d
         why = why or f"it changes projects/{changed}/, the record's project is {project}"
         return outcome("none", f"pull request {number} is not one enrollment: {why}", number, project, sha)
     # The files were listed for whatever the head was when they were asked for: the head must still be `sha`.
-    why = open_at(api.get(f"repos/{repo}/pulls/{number}"), repo, sha)
+    why = open_at(api.get(f"repos/{repo}/pulls/{number}"), repo, sha, head)
     if why:
         return outcome("none", f"pull request {number}: {why}", number, project, sha)
     where = f"pull request {number}: projects/{project}/ at {sha[:7]}"
     lang = language(api, repo, project, sha)
+    if lang is None:
+        return outcome("none", f"{where}: its project.yaml cannot be read for its language; the next run decides",
+                       number, project, sha)
     if lang in PAUSED_LANGUAGES:
         return outcome("label", f"{where} is in {lang}, which is paused", number, project, sha, "language-paused")
     if not STATEMENTS_NAME.fullmatch(project):

@@ -12,6 +12,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -112,8 +113,10 @@ class World:
                              "head_repository": {"full_name": head_repo}}
 
     @staticmethod
-    def pull(number=PR, sha=SHA, state="open", base="main"):
-        return {"number": number, "state": state, "head": {"sha": sha},
+    def pull(number=PR, sha=SHA, state="open", base="main", head_repo="FreeREAC/oss-verify",
+             branch="add-plugin-hostd"):
+        return {"number": number, "state": state,
+                "head": {"sha": sha, "ref": branch, "repo": {"full_name": head_repo}, "label": f"x:{branch}"},
                 "base": {"ref": base, "repo": {"full_name": REPO}}}
 
     def api(self):
@@ -225,6 +228,27 @@ class ForgedChecks(unittest.TestCase):
         world.check(606, "lint", 205)
         self.assertNotSent(world, "lint (no known source)")
 
+    def test_a_ruleset_that_requires_less_lowers_no_bar(self):
+        world = World()
+        world.required = []                          # the ruleset is off, or lists nothing
+        world.checks = [c for c in world.checks if c["name"] != "tests"]
+        self.assertNotSent(world, "tests (not run")
+
+    def test_the_newest_bound_run_of_a_check_decides(self):
+        # an older success, then a newer re-run that failed or is still running: not sent
+        for conclusion, status in (("failure", "completed"), (None, "in_progress")):
+            world = World()
+            world.run(206, ".github/workflows/terms.yaml", "pull_request_target")
+            world.check(607, "terms-accepted", 206, conclusion=conclusion)
+            world.checks[-1]["status"] = status
+            self.assertNotSent(world, "terms-accepted")
+        # an older failure, then a newer success: sent
+        world = World()
+        world.checks[2]["conclusion"] = "failure"
+        world.run(207, ".github/workflows/terms.yaml", "pull_request_target")
+        world.check(608, "terms-accepted", 207)
+        self.assertEqual(world.decide()["decision"], "dispatch")
+
     def test_a_required_check_not_run_or_not_passed_sends_nothing(self):
         for conclusion in ("failure", "cancelled", None):
             world = World()
@@ -265,12 +289,37 @@ class ThePullRequest(unittest.TestCase):
             world.files = files
             self.assertEqual(world.decide()["decision"], "none", files)
 
-    def test_a_second_pull_request_at_the_same_commit_does_not_block_the_first(self):
-        # The record names pull request 32; no list of open pull requests is read.
-        world = World()
+    def other_pull_request(self, world, conclusion):
+        """Pull request 77, from someone else's fork, at the same commit: its own Terms and Build runs, newer."""
+        world.run(301, ".github/workflows/terms.yaml", "pull_request_target", head_repo="someone/oss-verify",
+                  branch="copy")
+        world.check(701, "terms-accepted", 301, conclusion=conclusion)
+        world.run(302, ".github/workflows/build.yaml", "pull_request_target", head_repo="someone/oss-verify",
+                  branch="copy")
+        world.check(702, "project-builds", 302, conclusion=conclusion)
+        world.artifacts[302] = record(pr=77)
+        return world
+
+    def test_a_second_pull_request_at_the_same_commit_neither_blocks_nor_takes_the_first(self):
+        for conclusion in ("failure", "success"):
+            got = self.other_pull_request(World(), conclusion).decide()
+            self.assertEqual((got["decision"], got["pr"]), ("dispatch", "32"), (conclusion, got["reason"]))
+
+    def test_the_second_pull_requests_own_run_speaks_for_it_alone(self):
+        world = self.other_pull_request(World(), "success")
+        world.pulls = [World.pull(number=77, head_repo="someone/oss-verify", branch="copy")]
         api = world.api()
-        self.assertEqual(dispatch.decide(api, REPO, 104, "pull_request_target", SHA)["decision"], "dispatch")
-        self.assertFalse([c for c in api.calls if "pulls?" in c])
+        api.table[f"repos/{REPO}/pulls/77"] = Calls(*world.pulls)
+        api.table[f"repos/{REPO}/pulls/77/files?per_page=100"] = [world.files]
+        # its Tests and Validate runs never ran, so the checks of pull request 77's head have not all passed
+        got = dispatch.decide(api, REPO, 301, "pull_request_target", SHA)
+        self.assertEqual(got["decision"], "none")
+        self.assertIn("enrollment (not run", got["reason"])
+
+    def test_the_run_that_completed_must_be_of_the_commit(self):
+        world = World()
+        world.runs[104]["head_sha"] = NEWER
+        self.assertEqual(world.decide()["decision"], "none")
 
     def test_a_record_of_another_commit_or_shape_sends_nothing(self):
         for change in ({"sha": NEWER}, {"schema": "other"}, {"pr": "32"}, {"pr": True}, {"project": "../x"},
@@ -345,6 +394,24 @@ class Labels(unittest.TestCase):
     def test_large_sanitizer_builds_do_not_count(self):
         self.assertEqual(self.decide()["decision"], "dispatch")
 
+    def test_a_binary_the_loader_maps_no_executable_byte_of_goes_to_a_person(self):
+        # a build that clears the program headers' executable flag, or their count, after the link
+        got = self.decide(plain_text=10, plain_exec=0)
+        self.assertEqual((got["decision"], got["label"]), ("label", "size-review"))
+
+    def test_a_project_yaml_that_cannot_be_read_sends_nothing(self):
+        world = World()
+        api = world.api()
+
+        def refuse(path, raw=api.raw):
+            if "/contents/" in path:
+                raise subprocess.CalledProcessError(1, ["gh", "api", path])
+            return raw(path)
+        api.raw = refuse
+        got = dispatch.decide(api, REPO, 104, "pull_request_target", SHA)
+        self.assertEqual(got["decision"], "none")
+        self.assertIn("cannot be read for its language", got["reason"])
+
     def test_a_paused_language_is_labelled(self):
         world = World()
         world.project_yaml = b"repo: https://example.invalid/x\nlanguage: Python\n"
@@ -360,6 +427,39 @@ class Labels(unittest.TestCase):
         api.table[f"repos/{REPO}/contents/projects/{name}/project.yaml?ref={SHA}"] = b"language: c\n"
         got = dispatch.decide(api, REPO, 104, "pull_request_target", SHA)
         self.assertEqual((got["decision"], got["label"], got["project"]), ("label", "name-review", name))
+
+
+class TheRecord(unittest.TestCase):
+    """build.yaml's own code, run here: binary-sizes on a work directory, then the record job's script, then the
+    record read back as enroll-dispatch reads it."""
+
+    def test_binary_sizes_and_the_record_job_make_a_record_enroll_dispatch_takes(self):
+        if not shutil.which("jq"):
+            self.skipTest("jq is not installed")
+        sys.path.insert(0, str(ROOT / "tools" / "tests"))
+        from test_manifest import elf, PT_LOAD
+        with tempfile.TemporaryDirectory() as directory:
+            work = pathlib.Path(directory, "work")
+            targets = {}
+            for target, exe in (("fuzz_a", 3000), ("fuzz_b", 1_200_000)):
+                builds = {}
+                for build in ("plain", "asan"):
+                    path = work / "out" / target / f"{target}.{build}"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(elf(symtab=False, sections=[(".text", 100)], segments=[(PT_LOAD, 5, exe)]))
+                    builds[build] = {"file": path.name, "bytes": path.stat().st_size, "sha256": "0" * 64}
+                targets[target] = {"builds": builds}
+            (work / "manifest.yaml").write_text(yaml.safe_dump({"targets": targets}))
+            sizes_line = subprocess.run([sys.executable, str(ROOT / ".github" / "scripts" / "binary-sizes"), str(work)],
+                                        capture_output=True, text=True, check=True).stdout.strip()
+            script = yaml.safe_load((ROOT / ".github" / "workflows" / "build.yaml").read_text())["jobs"]["record"][
+                "steps"][0]["run"]
+            env = dict(os.environ, PR=str(PR), NAME="plugin-hostd", SHA=SHA, SIZES=sizes_line, RUNNER_TEMP=directory)
+            subprocess.run(["bash", "-c", script], env=env, check=True)
+            rec = json.loads(pathlib.Path(directory, "record", "record.json").read_text())
+        self.assertEqual(dispatch.record_problem(rec, SHA), "")
+        self.assertEqual(rec["sizes"]["fuzz_a"]["plain"], {"text": 100, "exec": 3000})
+        self.assertEqual(dispatch.oversized(rec), ["fuzz_b.plain (100 bytes of .text, 1,200,000 executable bytes)"])
 
 
 class Jobs(unittest.TestCase):

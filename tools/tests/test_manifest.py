@@ -196,6 +196,10 @@ class Layout(Scratch):
         self.assertIsNone(manifest.executable_bytes(self.write("truncated-exec", data[:len(data) - 200])))
         self.assertIsNone(manifest.executable_bytes(self.write("not-elf", b"#!/bin/sh\n")))
         self.assertEqual(manifest.executable_bytes(self.write("no-segments", elf(symtab=False))), 0)
+        # e_phentsize smaller than one entry, and the PN_XNUM count: the program headers cannot be read
+        for offset, value in ((54, 8), (56, 0xFFFF)):
+            bad = data[:offset] + struct.pack("<H", value) + data[offset + 2:]
+            self.assertIsNone(manifest.executable_bytes(self.write(f"phdr-{offset}", bad)), offset)
 
     def test_a_truncated_file_is_not_read(self):
         data = elf(symtab=False, sections=[(".text", 1)], segments=[PT_LOAD, PT_INTERP])
