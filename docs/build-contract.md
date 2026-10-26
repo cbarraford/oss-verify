@@ -317,6 +317,42 @@ A proof is only as strong as its fuzz target. Thus each fuzz target must obey th
 
 It needs `qemu-riscv64-static` on `PATH`, and compiler-rt's source from GitHub on the first run. On Ubuntu 24.04, take qemu out of its package, and do not install it, because the package registers qemu with the kernel for riscv64 programs: `apt-get download qemu-user-static && dpkg-deb -x qemu-user-static_*.deb <directory>`, then add `<directory>/usr/bin` to `PATH`.
 
+## Rust fuzz targets
+
+A Rust fuzz target is a cargo-fuzz `[[bin]]` of the project's repository. The Rust toolchain image adds Rust nightly-2025-07-16 (rustc 1.90.0, LLVM 20.1.8) and its sealed standard library to the C and C++ toolchain. Its row in infra/toolchains.tsv names it. The oss-fuzz-theorems 2026.10 release built its Rust binaries in this image.
+
+rustc makes no static library from a `[[bin]]`. Thus the build makes one package for each fuzz target: [rust/gen-shim.py](../infra/base-builder/rust/gen-shim.py) writes a package named `oft-rust-shim`, whose library root is a copy of the bin's source without its `#![no_main]` lines. The package depends on the adapter `oft-rust-rt`, on the dependencies of the fuzz package, and on the fuzz package itself when it has a `[lib]`. `build.sh` then builds this package and links it with the driver ([rust/recipes.sh](../infra/base-builder/rust/recipes.sh)).
+
+A Rust project has all four builds. Each one compiles the standard library with its own flags (`-Zbuild-std`):
+
+| build | what the compiler gets |
+|---|---|
+| `plain` | `--cfg fuzzing -Zub-checks=no` |
+| `ubsan` | `--cfg fuzzing -Zub-checks=yes` |
+| `asan` | `--cfg fuzzing -Zub-checks=no -Zsanitizer=address` |
+| `asan-ubsan` | `--cfg fuzzing -Zub-checks=yes -Zsanitizer=address` |
+
+The `ubsan` build is rustc's UB checks, which panic; it is not clang's UndefinedBehaviorSanitizer. Thus a Rust project may not set `ubsan_checks` ([project-yaml.md](project-yaml.md#ubsan_checks)).
+
+### The lock of a Rust fuzz target
+
+The lock in the project directory is the lock of the generated `oft-rust-shim` package, not of the fuzz package. The `crates` line of `sources` makes the shim package, copies this lock to `shim/Cargo.lock`, and vendors the crates with `cargo vendor --locked` ([lay-out-sources](../infra/base-builder/lay-out-sources)). The line gives the vendor directory, the lock, the source tree, the fuzz directory and the name of the bin:
+
+    copy	targets/<target>/Cargo.lock	Cargo.lock
+    crates	ext/<target>/vendor	targets/<target>/Cargo.lock	ext/<target>/src	fuzz	<bin>
+
+A lock of the fuzz package names neither `oft-rust-shim` nor `oft-rust-rt`. `cargo vendor --locked` refuses to update a lock, so the build stops with `cannot update the lock file ... because --locked was passed to prevent this` (exit status 101). `lay-out-sources` also stops when `cargo vendor` changed the lock, so the lock must stay as it is.
+
+Make the lock from a checkout of this repository, with the same steps that the build uses:
+
+    tmp=$(mktemp -d) && cp -a <project checkout> "$tmp/src" && touch "$tmp/src/.oft-scratch-copy"
+    python3 infra/base-builder/rust/gen-shim.py --src "$tmp/src" --fuzz-dir fuzz --bin <bin> \
+      --out "$tmp/pkg" --rt "$PWD/infra/base-builder/rust/oft-rust-rt"
+    cargo generate-lockfile --manifest-path "$tmp/pkg/Cargo.toml"
+    cp "$tmp/pkg/Cargo.lock" projects/<name>/Cargo.lock
+
+Two fuzz targets with the same dependencies can share one lock and one vendor directory: `tools/seeds/bincode/sources` lays out the second target's vendor directory as a `link` to the first.
+
 ## Go fuzz targets
 
 A Go fuzz target is an OSS-Fuzz Go fuzz target, as it is. OSS-Fuzz's Go helpers build it: `compile_go_fuzzer` for a go-fuzz `Fuzz(data []byte) int` function, and `compile_native_go_fuzzer` or `compile_native_go_fuzzer_v2` for a `testing.F` fuzz test. The Go toolchain image adds Go 1.27.1 and these helpers to the C and C++ toolchain. Its row in infra/toolchains.tsv names it. The oss-fuzz-theorems 2026.10 release built its Go binaries in this image, but did not publish them. Our builds make them again, byte for byte.
