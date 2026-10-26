@@ -43,11 +43,12 @@ permissions: {}
 concurrency:
   # The runs for one pull request's head wait for each other, so that they read the checks one after another. The
   # group names the head's repository and branch too, so that another pull request at the same commit cancels no run
-  # of this one. A Build run started by hand is about the pull request its record names, not the main commit it ran
-  # on: each has a group of its own.
+  # of this one; `:`, which neither a repository's name nor a branch's can hold (git check-ref-format refuses it in a
+  # ref, and a GitHub repository name is letters, digits, `.`, `_` and `-`), keeps the parts apart. A Build run started
+  # by hand is about the pull request its record names, not the main commit it ran on: each has a group of its own.
   group: >-
-    enroll-dispatch-${{ github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.id
-    || format('{0}-{1}-{2}', github.event.workflow_run.head_sha,
+    enroll-dispatch:${{ github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.id
+    || format('{0}:{1}:{2}', github.event.workflow_run.head_sha,
     github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch) }}
   cancel-in-progress: false
 
