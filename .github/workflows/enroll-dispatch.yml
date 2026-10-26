@@ -12,7 +12,8 @@
 #             its head commit and the project, to Theorem's private statements repository (repository id INTERNAL_ID
 #             below; its name is not published), whose enrollment workflow builds the project, writes its facts and
 #             statements, and opens their pull request there, or updates the one open for the project; that workflow
-#             keeps the daily limit and labels a pull request statements-queued when it is over it. On label: puts
+#             keeps the daily limit and labels a pull request statements-queued when it is over it, or when the
+#             project's archives wait for the next release. On label: puts
 #             the label on the pull request and sends nothing, so that a person decides: size-review (a plain binary
 #             above 1,000,000 bytes, the line "Up to 1 MB", dispatch://OSSV-141/ask/7c73eb21), language-paused (a
 #             language whose projects are paused for now) or name-review (a name the statements repository cannot
