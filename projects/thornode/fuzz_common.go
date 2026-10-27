@@ -1,7 +1,7 @@
 // OSS Verify fuzz targets for THORNode's common package: address parsing, asset parsing and the share arithmetic
 // that pool, LP and fee accounting use. build.sh copies this file into ossverify/common in the THORNode checkout.
 //
-// Copyright (c) THORChain contributors. SPDX-License-Identifier: MIT (as THORNode).
+// Copyright (c) THORChain contributors. SPDX-License-Identifier: Apache-2.0
 //
 // THORNode is a blockchain state machine. Every validator runs the same code on the same input, and a panic in a
 // block's BeginBlock or EndBlock halts the chain. These parsers read strings from user-sent memos and from external

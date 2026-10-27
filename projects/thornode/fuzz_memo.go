@@ -1,7 +1,7 @@
 // OSS Verify fuzz target for THORNode's memo parser. build.sh copies this file into ossverify/memo in the THORNode
 // checkout.
 //
-// Copyright (c) THORChain contributors. SPDX-License-Identifier: MIT (as THORNode).
+// Copyright (c) THORChain contributors. SPDX-License-Identifier: Apache-2.0
 //
 // Every inbound transaction carries a memo that its sender writes, and THORChain parses it in consensus. It is
 // THORNode's fuzz target FuzzParseMemo (x/thorchain/memo/memo_security_fuzz_test.go), with these changes for OSS

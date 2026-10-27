@@ -2,7 +2,7 @@
 // addresses, SS58 addresses, and the Solana RPC version field. build.sh copies this file into ossverify/chains in the
 // THORNode checkout.
 //
-// Copyright (c) THORChain contributors. SPDX-License-Identifier: MIT (as THORNode).
+// Copyright (c) THORChain contributors. SPDX-License-Identifier: Apache-2.0
 //
 // Bifrost reads these bytes from external chains and their RPC nodes, and an attacker who sends a transaction to a
 // vault controls them. A panic stops the observer or signer of each node that reads the same block, so it halts that

@@ -1,7 +1,7 @@
 # THORNode on the OSS Verify builder: its Go fuzz targets, built with OSS-Fuzz's Go helpers in the Go toolchain image
 # (go/compile-go). tools/check passes REPO, COMMIT and BASE_BUILDER.
 #
-# Copyright (c) THORChain contributors. SPDX-License-Identifier: MIT (as THORNode).
+# Copyright (c) THORChain contributors. SPDX-License-Identifier: Apache-2.0
 ARG BASE_BUILDER=oss-verify-base-builder
 FROM ${BASE_BUILDER}
 ARG REPO

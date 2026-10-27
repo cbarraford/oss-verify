@@ -1,7 +1,7 @@
 #!/bin/bash -eu
 # THORNode's fuzz targets for OSS Verify, in the form of an OSS-Fuzz Go build.sh.
 #
-# Copyright (c) THORChain contributors. SPDX-License-Identifier: MIT (as THORNode).
+# Copyright (c) THORChain contributors. SPDX-License-Identifier: Apache-2.0
 #
 # The fuzz targets are go-fuzz functions, Fuzz(data []byte) int, in three packages that this script adds to the
 # checkout, so that each binary links only the code that its fuzz target calls. compile_go_fuzzer builds them with no

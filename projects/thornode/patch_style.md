@@ -1,4 +1,4 @@
-<!-- THORNode's report and patch preferences for OSS Verify. Copyright (c) THORChain contributors. SPDX-License-Identifier: MIT (as THORNode). -->
+<!-- THORNode's report and patch preferences for OSS Verify. Copyright (c) THORChain contributors. SPDX-License-Identifier: Apache-2.0 -->
 # Patch style and report preferences
 
 ## What we care about
